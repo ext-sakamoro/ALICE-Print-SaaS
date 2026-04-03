@@ -1,77 +1,53 @@
-//! ALICE SaaS — Core Engine
-
 use axum::{
-    extract::State,
-    http::StatusCode,
+    routing::get,
     response::Json,
-    routing::{get, post},
     Router,
 };
-use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, sync::Arc, time::Instant};
-use tracing::info;
-use tracing_subscriber::EnvFilter;
+use serde::Serialize;
+use tower_http::cors::{Any, CorsLayer};
 
-#[derive(Clone)]
-struct AppState {
-    start_time: Instant,
-}
-
-#[derive(Debug, Serialize)]
-struct HealthResponse {
-    status: String,
-    version: String,
-    uptime_seconds: f64,
-}
-
-#[derive(Debug, Deserialize)]
-struct ProcessRequest {
-    data: String,
-    #[serde(default)]
-    options: serde_json::Value,
-}
-
-#[derive(Debug, Serialize)]
-struct ProcessResponse {
-    result: String,
-    latency_ms: f64,
-}
-
-async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "ok".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        uptime_seconds: state.start_time.elapsed().as_secs_f64(),
-    })
-}
-
-async fn process(
-    Json(req): Json<ProcessRequest>,
-) -> Result<Json<ProcessResponse>, StatusCode> {
-    let start = Instant::now();
-    // TODO: ALICE crate integration
-    let result = format!("[stub] processed: {}", &req.data[..req.data.len().min(100)]);
-    Ok(Json(ProcessResponse {
-        result,
-        latency_ms: start.elapsed().as_secs_f64() * 1000.0,
-    }))
-}
+#[derive(Serialize)]
+struct Health { status: String, service: String, version: String }
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "print-engine=info".into()),
+        )
         .init();
 
-    let state = Arc::new(AppState { start_time: Instant::now() });
+    let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
 
     let app = Router::new()
         .route("/health", get(health))
-        .route("/api/v1/process", post(process))
-        .with_state(state);
+        .route("/api/v1/print/health", get(health))
+        // TODO: Add domain-specific endpoints here
+        .layer(cors);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8081));
-    info!("Engine listening on {}", addr);
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8081);
+    let addr = format!("0.0.0.0:{port}");
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    tracing::info!("ALICE Print Core Engine on {addr}");
     axum::serve(listener, app).await.unwrap();
+}
+
+async fn health() -> Json<Health> {
+    Json(Health {
+        status: "ok".into(),
+        service: "ALICE Print".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn health_check() {
+        assert_eq!(env!("CARGO_PKG_VERSION"), "0.1.0");
+    }
 }
